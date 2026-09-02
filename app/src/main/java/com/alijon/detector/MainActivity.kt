@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
 /* ------------------------------------------------------------------ настройка */
 
 /** Репозиторий с прошивками: владелец/имя. */
-private const val REPO = "alijon/pi-detector"
+private const val REPO = "alijon-pi-detector"
 
 /* -------------------------------------------------------------------- палитра */
 
