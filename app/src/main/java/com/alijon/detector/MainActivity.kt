@@ -30,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -43,20 +45,20 @@ private const val REPO = "alijon/pi-detector"
 
 /* -------------------------------------------------------------------- палитра */
 
-private val Ground = Color(0xFF14100D)
-private val Panel = Color(0xFF1E1813)
-private val Edge = Color(0xFF3A2F24)
-private val EdgeSoft = Color(0xFF2C241C)
-private val Ink = Color(0xFFECE3D4)
-private val InkDim = Color(0xFFA1907A)
-private val InkFaint = Color(0xFF6D6053)
-private val Brass = Color(0xFFE8A33D)
-private val Oxide = Color(0xFFF0552A)
-private val Slate = Color(0xFF7D9BB0)
-private val Ok = Color(0xFF84B06A)
-private val Crit = Color(0xFFD8482E)
+internal val Ground = Color(0xFF14100D)
+internal val Panel = Color(0xFF1E1813)
+internal val Edge = Color(0xFF3A2F24)
+internal val EdgeSoft = Color(0xFF2C241C)
+internal val Ink = Color(0xFFECE3D4)
+internal val InkDim = Color(0xFFA1907A)
+internal val InkFaint = Color(0xFF6D6053)
+internal val Brass = Color(0xFFE8A33D)
+internal val Oxide = Color(0xFFF0552A)
+internal val Slate = Color(0xFF7D9BB0)
+internal val Ok = Color(0xFF84B06A)
+internal val Crit = Color(0xFFD8482E)
 
-private enum class Screen { DEVICES, CONSOLE, FIRMWARE, FINDS }
+private enum class Screen { DEVICES, CONSOLE, FIRMWARE, FINDS, MAP }
 
 class MainActivity : ComponentActivity() {
 
@@ -64,6 +66,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var audio: VcoAudio
     private lateinit var haptics: Haptics
     private lateinit var finds: FindLog
+    private lateinit var tracker: LocationTracker
+    private lateinit var flagger: AutoFlagger
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,11 +75,14 @@ class MainActivity : ComponentActivity() {
         audio = VcoAudio()
         haptics = Haptics(this)
         finds = FindLog(this)
+        tracker = LocationTracker(this)
+        flagger = AutoFlagger(finds, tracker)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Ground, surface = Panel)) {
                 App(
                     ble = ble, audio = audio, haptics = haptics, finds = finds,
+                    tracker = tracker, flagger = flagger,
                     onKeepAwake = { on ->
                         if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -85,9 +92,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() { super.onResume(); tracker.start() }
+
+    override fun onPause() { super.onPause(); tracker.stop() }
+
     override fun onDestroy() {
         super.onDestroy()
         audio.enabled = false
+        tracker.stop()
         ble.disconnect()
     }
 }
@@ -100,6 +112,8 @@ private fun App(
     audio: VcoAudio,
     haptics: Haptics,
     finds: FindLog,
+    tracker: LocationTracker,
+    flagger: AutoFlagger,
     onKeepAwake: (Boolean) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -114,14 +128,41 @@ private fun App(
     val tele by ble.telemetry.collectAsStateWithLifecycle()
 
     val model = Models.of(ident?.model)
-    val history = remember { mutableStateListOf<Int>().apply { repeat(160) { add(0) } } }
 
-    // Телеметрия питает график, звук и вибрацию
-    LaunchedEffect(tele.level) {
-        history.removeAt(0); history.add(tele.level)
+    /*
+     * График держим как ОБЫЧНЫЙ неизменяемый список внутри одного состояния,
+     * а не как mutableStateListOf.
+     *
+     * Так было раньше и так делать нельзя: список правился из LaunchedEffect
+     * (removeAt/add), а Canvas в это же время обходил его через forEachIndexed.
+     * Снимок списка менялся прямо во время обхода — ConcurrentModificationException
+     * и вылет приложения. Проявлялось это ровно при обнаружении цели: пока
+     * ступень равна нулю, значение не меняется, эффект не срабатывает и список
+     * никто не трогает.
+     *
+     * Замена целого списка одним присваиванием такой гонки не допускает в
+     * принципе: тот экземпляр, который начал рисовать Canvas, уже никогда не
+     * изменится.
+     */
+    val history = remember { mutableStateOf(List(TRACE_POINTS) { 0 }) }
+
+    // График — равномерная выборка по времени. Раньше ключом эффекта была сама
+    // ступень, поэтому точка добавлялась только при её изменении, и «время» на
+    // графике шло рывками.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(TRACE_STEP_MS)
+            history.value = history.value.drop(1) + ble.telemetry.value.level
+        }
+    }
+
+    // Звук и вибрация — наоборот, сразу по факту изменения ступени.
+    LaunchedEffect(tele.level, model.levels) {
         audio.level = tele.level.toFloat()
         audio.levels = model.levels
         haptics.onLevel(tele.level)
+        // Больше AUTO_FLAG_LEVEL делений — сам ставим флажок и пишем координаты.
+        flagger.onLevel(tele.level)
     }
     LaunchedEffect(ident) { if (ident != null) screen = Screen.CONSOLE }
 
@@ -139,6 +180,7 @@ private fun App(
                 Screen.CONSOLE -> model.title
                 Screen.FIRMWARE -> "Прошивка"
                 Screen.FINDS -> "Находки"
+                Screen.MAP -> "Карта"
             },
             status = when (link) {
                 Link.READY -> "На связи" to Ok
@@ -157,12 +199,14 @@ private fun App(
             )
 
             Screen.CONSOLE -> ConsoleScreen(
-                model = model, tele = tele, history = history, audio = audio, haptics = haptics,
+                model = model, tele = tele, history = history.value, audio = audio, haptics = haptics,
                 onKeepAwake = onKeepAwake,
                 onSetpoint = { key, v -> ble.send("$key$v") },
-                onMarkFind = { finds.add(tele.level) },
+                onMarkFind = { finds.add(tele.level, tracker.position.value?.latitude,
+                                         tracker.position.value?.longitude) },
                 onFirmware = { screen = Screen.FIRMWARE },
                 onFinds = { screen = Screen.FINDS },
+                onMap = { screen = Screen.MAP },
                 onBack = { ble.disconnect(); screen = Screen.DEVICES },
             )
 
@@ -172,7 +216,14 @@ private fun App(
             )
 
             Screen.FINDS -> FindsScreen(
-                log = finds, onBack = { screen = Screen.CONSOLE },
+                log = finds,
+                onMap = { screen = Screen.MAP },
+                onBack = { screen = Screen.CONSOLE },
+            )
+
+            Screen.MAP -> MapScreen(
+                log = finds, tracker = tracker,
+                onBack = { screen = Screen.FINDS },
             )
         }
         Spacer(Modifier.height(28.dp))
@@ -291,7 +342,7 @@ private fun ConsoleScreen(
     onKeepAwake: (Boolean) -> Unit,
     onSetpoint: (String, Int) -> Unit,
     onMarkFind: () -> Find,
-    onFirmware: () -> Unit, onFinds: () -> Unit, onBack: () -> Unit,
+    onFirmware: () -> Unit, onFinds: () -> Unit, onMap: () -> Unit, onBack: () -> Unit,
 ) {
     var sound by remember { mutableStateOf(false) }
     var buzz by remember { mutableStateOf(true) }
@@ -383,6 +434,7 @@ private fun ConsoleScreen(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("К приборам", color = InkDim) }
         OutlinedButton(onClick = onFinds, modifier = Modifier.weight(1f)) { Text("Находки", color = InkDim) }
+        OutlinedButton(onClick = onMap, modifier = Modifier.weight(1f)) { Text("Карта", color = InkDim) }
         OutlinedButton(onClick = onFirmware, modifier = Modifier.weight(1f)) { Text("Прошивка", color = Brass) }
     }
 }
@@ -408,6 +460,10 @@ private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit)
 
 /* --------------------------------------------------------------- графика */
 
+/** Точек на графике и период выборки. */
+private const val TRACE_POINTS = 160
+private const val TRACE_STEP_MS = 50L
+
 @Composable
 private fun Gauge(level: Int, levels: Int, modifier: Modifier) = Canvas(modifier) {
     val cx = size.width / 2f
@@ -415,14 +471,15 @@ private fun Gauge(level: Int, levels: Int, modifier: Modifier) = Canvas(modifier
     val r = minOf(size.width * 0.46f, size.height * 0.88f)
     val thick = r * 0.20f
     val gapDeg = 1.8f
-    val spanDeg = (180f - gapDeg * (levels - 1)) / levels
+    val n = levels.coerceAtLeast(1)          // деление на ноль дало бы NaN в drawArc
+    val spanDeg = (180f - gapDeg * (n - 1)) / n
 
-    for (i in 0 until levels) {
+    for (i in 0 until n) {
         val start = 180f + i * (spanDeg + gapDeg)
         drawArc(
             color = when {
                 i >= level -> EdgeSoft
-                i >= levels - 2 -> Oxide
+                i >= n - 2 -> Oxide
                 else -> Brass
             },
             startAngle = start, sweepAngle = spanDeg, useCenter = false,
@@ -436,27 +493,31 @@ private fun Gauge(level: Int, levels: Int, modifier: Modifier) = Canvas(modifier
 
 @Composable
 private fun Trace(history: List<Int>, levels: Int, modifier: Modifier) = Canvas(modifier) {
-    if (history.isEmpty()) return@Canvas
+    // Копия на время отрисовки: снаружи список уже неизменяемый, но так кадр
+    // гарантированно рисуется по одному и тому же состоянию.
+    val pts = history.toList()
+    if (pts.size < 2) return@Canvas
+    val n = levels.coerceAtLeast(1)
     val pad = 3f
-    fun y(v: Int) = size.height - pad - (v.toFloat() / levels) * (size.height - pad * 2)
-    fun x(i: Int) = i.toFloat() / (history.size - 1) * size.width
+    fun y(v: Int) = size.height - pad - (v.toFloat() / n) * (size.height - pad * 2)
+    fun x(i: Int) = i.toFloat() / (pts.size - 1) * size.width
 
     listOf(2, 4, 6).forEach { drawLine(EdgeSoft, Offset(0f, y(it)), Offset(size.width, y(it)), 1f) }
 
     val fill = Path().apply {
         moveTo(0f, size.height)
-        history.forEachIndexed { i, v -> lineTo(x(i), y(v)) }
+        pts.forEachIndexed { i, v -> lineTo(x(i), y(v)) }
         lineTo(size.width, size.height); close()
     }
     drawPath(fill, Brass.copy(alpha = 0.22f))
 
     val line = Path().apply {
-        history.forEachIndexed { i, v -> if (i == 0) moveTo(x(i), y(v)) else lineTo(x(i), y(v)) }
+        pts.forEachIndexed { i, v -> if (i == 0) moveTo(x(i), y(v)) else lineTo(x(i), y(v)) }
     }
     drawPath(line, Brass, style = Stroke(width = 2f))
 
-    val last = history.last()
-    drawCircle(if (last >= levels - 1) Oxide else Brass, 3.5f, Offset(size.width - 2f, y(last)))
+    val last = pts.last()
+    drawCircle(if (last >= n - 1) Oxide else Brass, 3.5f, Offset(size.width - 2f, y(last)))
 }
 
 /* -------------------------------------------------------------- прошивка */
@@ -560,14 +621,16 @@ private fun InfoRow(label: String, value: String) =
 /* --------------------------------------------------------------- находки */
 
 @Composable
-private fun FindsScreen(log: FindLog, onBack: () -> Unit) {
-    var items by remember { mutableStateOf(log.load()) }
+private fun FindsScreen(log: FindLog, onMap: () -> Unit, onBack: () -> Unit) {
+    // Список живой: автоматика ставит флажки прямо во время проводки.
+    val items by log.items.collectAsStateWithLifecycle()
 
     if (items.isEmpty()) {
         Section {
             Text(
-                "Пока пусто. На экране прибора нажмите «Отметить находку» — " +
-                        "запишется время, ступень отклика и координаты.",
+                "Пока пусто. Флажок ставится сам, когда на шкале больше " +
+                        "$AUTO_FLAG_LEVEL делений — записываются время, ступень и координаты. " +
+                        "Кнопка «Отметить находку» на экране прибора делает то же вручную.",
                 color = InkDim, fontSize = 13.sp
             )
         }
@@ -584,21 +647,31 @@ private fun FindsScreen(log: FindLog, onBack: () -> Unit) {
             Box(
                 Modifier.size(30.dp).background(Edge, RoundedCornerShape(2.dp)),
                 contentAlignment = Alignment.Center
-            ) { Text("${f.level}", color = Brass, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+            ) {
+                Text("${f.level}", color = if (f.level >= 7) Oxide else Brass,
+                    fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(f.stamp(), color = Ink, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
                 Text(f.place(), color = InkFaint, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
+            if (f.auto) Text("авто", color = InkFaint, fontSize = 10.sp)
         }
     }
 
     Spacer(Modifier.height(13.dp))
+    Button(
+        onClick = onMap, modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = Brass),
+    ) { Text("Карта с флажками", color = Ground, fontWeight = FontWeight.SemiBold) }
+
+    Spacer(Modifier.height(9.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Назад", color = InkDim) }
         OutlinedButton(
-            onClick = { log.clear(); items = emptyList() }, modifier = Modifier.weight(1f)
-        ) { Text("Очистить", color = Crit) }
+            onClick = { log.clear() }, enabled = items.isNotEmpty(), modifier = Modifier.weight(1f)
+        ) { Text("Стереть флажки", color = if (items.isEmpty()) InkFaint else Crit) }
     }
 }
 
@@ -609,11 +682,14 @@ private fun scanPermissions(): Array<String> =
         arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.ACCESS_FINE_LOCATION,   // нужен для координат находок
+            // Геолокация нужна не ради Bluetooth, а сама по себе: флажки на
+            // карте и координаты находок.
+            Manifest.permission.ACCESS_FINE_LOCATION,
         )
     else
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
+/** Хватает ли прав, чтобы искать приборы. Карта переживёт отказ отдельно. */
 private fun hasScanPermission(ctx: android.content.Context): Boolean {
     val needed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
         listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)

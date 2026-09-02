@@ -37,4 +37,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Карта OpenStreetMap: без ключей и без Google Play. Тайлы кэшируются,
+    // поэтому просмотренный дома район работает в поле без сети.
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 }

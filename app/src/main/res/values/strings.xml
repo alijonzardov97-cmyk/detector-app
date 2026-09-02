@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Detector Console</string>
+    <string name="app_name">T/S</string>
 
     <string name="devices">Приборы</string>
     <string name="console">Прибор</string>
     <string name="firmware">Прошивка</string>
     <string name="finds">Находки</string>
+    <string name="map">Карта</string>
+    <string name="map_scheme">Схема</string>
+    <string name="clear_flags">Стереть флажки</string>
+    <string name="no_location">Нет доступа к геолокации — флажки ставиться не будут.</string>
 
     <string name="scan_start">Искать приборы</string>
     <string name="scan_stop">Остановить</string>

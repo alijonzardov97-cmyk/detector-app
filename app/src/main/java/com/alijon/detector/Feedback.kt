@@ -1,9 +1,6 @@
 package com.alijon.detector
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.location.Location
-import android.location.LocationManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -17,8 +14,12 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * VCO audio generated on the phone.
@@ -93,7 +94,10 @@ class VcoAudio {
                     if (phase > 2 * PI) phase -= 2 * PI
                     buf[i] = (sin(phase) * amp * volume * 26000).toInt().toShort()
                 }
-                track?.write(buf, 0, buf.size)
+                // Поток живёт своей жизнью: если дорожку освободили между
+                // проверкой и записью, исключение здесь уронило бы всё
+                // приложение — оно ведь не на главном потоке.
+                try { track?.write(buf, 0, buf.size) } catch (_: Throwable) { break }
             }
         }.also { it.isDaemon = true; it.start() }
     }
@@ -128,22 +132,28 @@ class Haptics(ctx: Context) {
 
     private fun buzz(level: Int) {
         val v = vib ?: return
-        val ms = (25L + level * 6L)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val amp = (80 + level * 20).coerceAtMost(255)
-            v.vibrate(VibrationEffect.createOneShot(ms, amp))
-        } else {
-            @Suppress("DEPRECATION") v.vibrate(ms)
+        // Значения зажимаем: createOneShot бросает исключение на нулевой
+        // длительности и на амплитуде вне 1..255, а level приходит из эфира.
+        val ms = (25L + level.coerceAtLeast(0) * 6L).coerceIn(20L, 400L)
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val amp = (80 + level * 20).coerceIn(1, 255)
+                v.vibrate(VibrationEffect.createOneShot(ms, amp))
+            } else {
+                @Suppress("DEPRECATION") v.vibrate(ms)
+            }
         }
     }
 }
 
-/** One marked spot. */
+/** Одна отмеченная точка. */
 data class Find(
     val time: Long,
     val level: Int,
     val lat: Double?,
     val lon: Double?,
+    /** true — флажок поставлен автоматически по превышению порога на шкале. */
+    val auto: Boolean = false,
     val note: String = "",
 ) {
     fun stamp(): String =
@@ -155,14 +165,24 @@ data class Find(
 }
 
 /**
- * Find log. Kept in the app's private storage as JSON - no database needed for
- * a list this small, and the file can be pulled off the phone as is.
+ * Журнал находок.
+ *
+ * Хранится в приватной папке приложения простым JSON — для такого объёма база
+ * не нужна, а файл можно снять с телефона как есть.
+ *
+ * Список отдаётся потоком: карта и экран находок обновляются сами, как только
+ * автоматика поставила новый флажок.
  */
 class FindLog(private val ctx: Context) {
 
     private val file get() = ctx.filesDir.resolve("finds.json")
 
-    fun load(): List<Find> = runCatching {
+    private val _items = MutableStateFlow<List<Find>>(emptyList())
+    val items: StateFlow<List<Find>> = _items
+
+    init { _items.value = read() }
+
+    private fun read(): List<Find> = runCatching {
         val arr = JSONArray(file.readText())
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
@@ -171,51 +191,66 @@ class FindLog(private val ctx: Context) {
                 level = o.getInt("l"),
                 lat = if (o.isNull("lat")) null else o.getDouble("lat"),
                 lon = if (o.isNull("lon")) null else o.getDouble("lon"),
+                auto = o.optBoolean("a", false),
                 note = o.optString("n", ""),
             )
         }.sortedByDescending { it.time }
     }.getOrDefault(emptyList())
 
-    private fun save(list: List<Find>) = runCatching {
+    private fun write(list: List<Find>) = runCatching {
         val arr = JSONArray()
         list.forEach { f ->
             arr.put(JSONObject().apply {
                 put("t", f.time); put("l", f.level)
                 if (f.lat != null) put("lat", f.lat) else put("lat", JSONObject.NULL)
                 if (f.lon != null) put("lon", f.lon) else put("lon", JSONObject.NULL)
+                put("a", f.auto)
                 put("n", f.note)
             })
         }
         file.writeText(arr.toString())
     }
 
-    @SuppressLint("MissingPermission")
-    fun add(level: Int): Find {
-        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        val loc: Location? = runCatching {
-            listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-                .mapNotNull { lm?.getLastKnownLocation(it) }
-                .maxByOrNull { it.time }
-        }.getOrNull()
-
-        val f = Find(System.currentTimeMillis(), level, loc?.latitude, loc?.longitude)
-        save(listOf(f) + load())
+    /** Добавить точку. Координаты передаёт вызывающий — у него они свежее. */
+    fun add(level: Int, lat: Double?, lon: Double?, auto: Boolean = false): Find {
+        val f = Find(System.currentTimeMillis(), level, lat, lon, auto)
+        val list = listOf(f) + _items.value
+        _items.value = list
+        write(list)
         return f
     }
 
-    fun clear() = runCatching { file.delete() }
+    /** Есть ли уже флажок ближе meters метров — чтобы не сыпать точки в кучу. */
+    fun hasFlagNear(lat: Double, lon: Double, meters: Double): Boolean =
+        _items.value.any { f ->
+            f.lat != null && f.lon != null && distanceM(lat, lon, f.lat, f.lon) < meters
+        }
 
-    /** Everything as GPX so the track opens in any map app. */
+    fun clear() {
+        _items.value = emptyList()
+        runCatching { file.delete() }
+    }
+
+    /** Всё в GPX, чтобы трек открылся в любом картографическом приложении. */
     fun toGpx(): String = buildString {
         append("""<?xml version="1.0" encoding="UTF-8"?>""").append('\n')
-        append("""<gpx version="1.1" creator="Detector Console">""").append('\n')
+        append("""<gpx version="1.1" creator="T/S">""").append('\n')
         val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-        load().filter { it.lat != null && it.lon != null }.forEach { f ->
+        _items.value.filter { it.lat != null && it.lon != null }.forEach { f ->
             append("""  <wpt lat="${f.lat}" lon="${f.lon}">""").append('\n')
             append("""    <time>${iso.format(Date(f.time))}</time>""").append('\n')
             append("""    <name>Цель ${f.level}</name>""").append('\n')
             append("  </wpt>").append('\n')
         }
         append("</gpx>")
+    }
+
+    companion object {
+        /** Расстояние в метрах. Формула плоская — на десятках метров точна. */
+        fun distanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+            val dy = (lat2 - lat1) * 110_540.0
+            val dx = (lon2 - lon1) * 111_320.0 * cos(Math.toRadians((lat1 + lat2) / 2))
+            return sqrt(dx * dx + dy * dy)
+        }
     }
 }
