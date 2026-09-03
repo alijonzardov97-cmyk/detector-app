@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Передний слой адаптивной иконки: человек с металлоискателем.
+     Холст 108x108, видимая часть — центральный круг d=72 (то есть 18..90).
+     Вся фигура помещается в радиус 36 от центра, поэтому не обрезается ни
+     круглой маской, ни скруглённым квадратом.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- земля -->
+    <path
+        android:pathData="M28,78 L76,78"
+        android:strokeColor="#3A4048"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round" />
+
+    <!-- голова -->
+    <path
+        android:pathData="M37,30 a7,7 0 1,1 14,0 a7,7 0 1,1 -14,0 z"
+        android:fillColor="#D9A441" />
+
+    <!-- корпус, наклон вперёд -->
+    <path
+        android:pathData="M43,37 L39,56"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round" />
+
+    <!-- задняя нога -->
+    <path
+        android:pathData="M39,56 L31,75"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round" />
+
+    <!-- передняя нога -->
+    <path
+        android:pathData="M39,56 L49,74"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round" />
+
+    <!-- рука к рукояти -->
+    <path
+        android:pathData="M42,42 L59,46"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round" />
+
+    <!-- штанга с подлокотником -->
+    <path
+        android:pathData="M60,39 L60,46 L71,64"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- катушка -->
+    <path
+        android:pathData="M59,68 a12,4.5 0 1,1 24,0 a12,4.5 0 1,1 -24,0 z"
+        android:strokeColor="#D9A441"
+        android:strokeWidth="4.2" />
+</vector>
