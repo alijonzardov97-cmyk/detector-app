@@ -23,8 +23,20 @@ jobs:
       - name: Собрать debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      # Имя файла с версией. Без этого все сборки называются app-debug.apk,
+      # в папке загрузок они сливаются в одну кучу, и на телефон легко
+      # поставить предыдущую, ничего не заметив.
+      - name: Переименовать APK по версии
+        id: rename
+        run: |
+          V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/debug/app-debug.apk "TS-$V.apk"
+          ls -l "TS-$V.apk"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: detector-console-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          # Номер прогона в имени — сразу видно, свежий ли архив скачан.
+          name: TS-${{ steps.rename.outputs.version }}-run${{ github.run_number }}
+          path: TS-*.apk
           if-no-files-found: error
