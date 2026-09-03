@@ -248,10 +248,21 @@ class DetectorBle(private val ctx: Context) {
         return ok
     }
 
-    private suspend fun awaitOta(timeoutMs: Long): String? {
+    /**
+     * Регистрирует ожидание ответа ДО отправки команды.
+     *
+     * Раньше команда уходила первой, а ожидание ставилось следом. Ответ
+     * приходит в колбэке на своём потоке и мог успеть раньше — тогда его
+     * некуда было доставить, он терялся, и ожидание честно истекало по
+     * таймауту. На быстрых ответах вроде OTADONE это и происходило.
+     */
+    private suspend fun sendAndAwaitOta(cmd: String, timeoutMs: Long): String? {
         val d = CompletableDeferred<String>()
         otaReply = d
-        return withTimeoutOrNull(timeoutMs) { d.await() }
+        send(cmd)
+        val r = withTimeoutOrNull(timeoutMs) { d.await() }
+        if (r == null) otaReply = null
+        return r
     }
 
     /**
@@ -262,8 +273,8 @@ class DetectorBle(private val ctx: Context) {
     suspend fun sendFirmware(image: ByteArray, onProgress: (Float) -> Unit): String? {
         if (link.value != Link.READY) return "прибор не подключён"
 
-        send("OTA ${image.size}")
-        val hello = awaitOta(5000) ?: return "прибор не ответил на запрос обновления"
+        val hello = sendAndAwaitOta("OTA ${image.size}", 8000)
+            ?: return "прибор не ответил на запрос обновления"
         if (!hello.startsWith("OTAOK")) return hello
 
         val chunk = (mtu - 3).coerceIn(20, 512)
@@ -289,8 +300,9 @@ class DetectorBle(private val ctx: Context) {
             if (off % (chunk * 32) == 0) delay(2)   // дать стеку выдохнуть
         }
 
-        send("OTA!")
-        val fin = awaitOta(30000) ?: return "прибор не подтвердил запись"
+        // Прибор проверяет весь образ перед переключением слота — это долго.
+        val fin = sendAndAwaitOta("OTA!", 60000)
+            ?: return "прибор не подтвердил запись"
         return if (fin.startsWith("OTADONE")) null else fin
     }
 }
