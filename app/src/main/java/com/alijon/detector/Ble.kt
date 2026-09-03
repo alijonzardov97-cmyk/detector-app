@@ -35,6 +35,9 @@ class DetectorBle(private val ctx: Context) {
     val identity = MutableStateFlow<Identity?>(null)
     val telemetry = MutableStateFlow(Telemetry())
 
+    /** Служебные сообщения прибора об обновлении — для журнала на экране. */
+    val otaNote = MutableStateFlow<String?>(null)
+
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
     private var textBuf = StringBuilder()
@@ -206,6 +209,7 @@ class DetectorBle(private val ctx: Context) {
 
     private fun handleLine(line: String) {
         Parser.identity(line)?.let { identity.value = it; return }
+        if (line.startsWith("OTARDY")) { otaNote.value = line; return }
         if (line.startsWith("OTA")) { otaReply?.complete(line); otaReply = null; return }
         val keys = Models.of(identity.value?.model).controls.map { it.key }
         telemetry.value = Parser.telemetry(line, telemetry.value, keys)

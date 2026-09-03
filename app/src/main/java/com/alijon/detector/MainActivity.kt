@@ -579,6 +579,9 @@ private fun FirmwareScreen(
         InfoRow("Модель", Models.of(ident?.model).title)
         InfoRow("Серийный номер", ident?.serial ?: "—")
         InfoRow("Версия в приборе", ident?.fw ?: "—")
+        // Своя версия рядом — чтобы сразу видеть, что на телефоне стоит именно
+        // та сборка, которую собирали, а не предыдущая.
+        InfoRow("Версия приложения", BuildConfig.VERSION_NAME)
         InfoRow("Доступна", note)
 
         Spacer(Modifier.height(12.dp))
@@ -628,6 +631,7 @@ private fun FirmwareScreen(
                          * ответу, а по факту: подключаемся заново и смотрим,
                          * какую версию прибор называет теперь.
                          */
+                        ble.otaNote.value?.let { logs.add(0, "Прибор: $it") }
                         logs.add(0, err?.let { "Передача завершилась с замечанием: $it" }
                             ?: "Образ записан.")
                         logs.add(0, "Жду перезагрузки прибора…")
