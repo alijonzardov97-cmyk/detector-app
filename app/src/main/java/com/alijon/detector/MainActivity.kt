@@ -619,8 +619,31 @@ private fun FirmwareScreen(
                         if (image == null) { logs.add(0, "Не удалось скачать файл"); busy = false; return@launch }
                         logs.add(0, "Получено ${image.size} байт, передаю в прибор")
                         val err = ble.sendFirmware(image) { progress = it }
-                        logs.add(0, err?.let { "Прервано: $it. Прибор остался на прежней прошивке." }
-                            ?: "Готово. Прибор перезагружается на ${latest!!.version}")
+                        if (err != null) {
+                            logs.add(0, "Прервано: $err. Прибор остался на прежней прошивке.")
+                            busy = false
+                            return@launch
+                        }
+
+                        val installed = latest!!.version
+                        logs.add(0, "Образ записан. Жду перезагрузки прибора…")
+
+                        // Паспорт, прочитанный ДО перезагрузки, теперь недействителен:
+                        // подключаемся заново и спрашиваем версию у обновлённого прибора.
+                        val back = ble.reconnectAfterUpdate()
+                        val now = ble.identity.value?.fw
+
+                        logs.add(0, when {
+                            !back ->
+                                "Прибор не отозвался после перезагрузки. Включите на нём " +
+                                    "Bluetooth четырьмя нажатиями и подключитесь заново."
+                            now == installed ->
+                                "Готово. В приборе $installed."
+                            else ->
+                                "Записано, но прибор сообщает версию $now вместо $installed. " +
+                                    "Значит в самом файле прошивки версия не поднята: " +
+                                    "имя файла в релизе говорит одно, а FW_VERSION в скетче — другое."
+                        })
                         busy = false
                     }
                 }

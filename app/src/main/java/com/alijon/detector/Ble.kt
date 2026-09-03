@@ -143,11 +143,40 @@ class DetectorBle(private val ctx: Context) {
     var mtu: Int = 23
         private set
 
+    /** Адрес последнего прибора — чтобы переподключиться после его перезагрузки. */
+    var lastAddress: String? = null
+        private set
+
     fun connect(address: String) {
         stopScan()
         val dev = adapter?.getRemoteDevice(address) ?: return
+        lastAddress = address
         link.value = Link.CONNECTING
         gatt = dev.connectGatt(ctx, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    /**
+     * Дождаться, пока прибор перезагрузится после обновления, и подключиться
+     * снова. Без этого паспорт остаётся прочитанным ДО перезагрузки, и на
+     * экране висит старая версия — прибор-то уже другой.
+     */
+    suspend fun reconnectAfterUpdate(timeoutMs: Long = 25000): Boolean {
+        val addr = lastAddress ?: return false
+        disconnect()
+        delay(3000)                       // дать прибору подняться и начать рекламу
+
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            connect(addr)
+            val ok = withTimeoutOrNull(8000) {
+                while (identity.value == null) delay(150)
+                true
+            } ?: false
+            if (ok) return true
+            disconnect()
+            delay(1500)
+        }
+        return false
     }
 
     fun disconnect() {
