@@ -168,6 +168,7 @@ private fun configureOsmdroid(ctx: Context) {
 fun MapScreen(
     log: FindLog,
     tracker: LocationTracker,
+    modifier: Modifier = Modifier,
     onBack: () -> Unit,
 ) {
     val finds by log.items.collectAsStateWithLifecycle()
@@ -182,22 +183,32 @@ fun MapScreen(
         onDispose { }        // остановкой управляет MainActivity
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    // Кнопки — заливкой, а не тонким контуром: поверх карты и на тёмном фоне
+    // контурная кнопка почти не читается.
+    Column(modifier.fillMaxWidth()) {
 
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-            OutlinedButton(onClick = { tiles = !tiles }, modifier = Modifier.weight(1f)) {
-                Text(if (tiles) "Схема" else "Карта", color = InkDim, fontSize = 13.sp)
-            }
+            Button(
+                onClick = { tiles = !tiles }, modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Ink),
+            ) { Text(if (tiles) "Схема" else "Карта", fontSize = 13.sp) }
+
             Spacer(Modifier.width(8.dp))
-            OutlinedButton(
+
+            Button(
                 onClick = { confirmClear = true },
                 enabled = finds.isNotEmpty(),
                 modifier = Modifier.weight(1f),
-            ) { Text("Стереть флажки", color = if (finds.isEmpty()) InkFaint else Oxide, fontSize = 13.sp) }
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Panel, contentColor = Oxide,
+                    disabledContainerColor = Panel, disabledContentColor = InkFaint,
+                ),
+            ) { Text("Стереть флажки", fontSize = 13.sp) }
         }
 
+        // Карта занимает остаток высоты — кнопки сверху и снизу всегда на виду.
         Box(
-            Modifier.fillMaxWidth().height(360.dp)
+            Modifier.fillMaxWidth().weight(1f)
                 .background(Panel, RoundedCornerShape(10.dp))
                 .border(1.dp, Edge, RoundedCornerShape(10.dp))
         ) {
@@ -212,14 +223,15 @@ fun MapScreen(
         if (!tracker.granted()) {
             Text(
                 "Нет доступа к геолокации — флажки ставиться не будут.",
-                color = Oxide, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp)
+                color = Oxide, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)
             )
         }
 
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("Назад", color = InkDim)
-        }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = onBack, modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Ink),
+        ) { Text("Назад") }
     }
 
     if (confirmClear) {

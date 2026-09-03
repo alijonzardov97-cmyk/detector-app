@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -32,12 +33,12 @@ import kotlin.math.sqrt
  * Latency is the BLE hop only (roughly 50-100 ms with wired headphones), far
  * better than streaming A2DP audio from the detector itself.
  */
-class VcoAudio {
+class VcoAudio(private val ctx: Context? = null) {
 
     var enabled: Boolean = false
         set(v) { field = v; if (v) start() else stop() }
 
-    /** 0..levels, set from telemetry. */
+    /** 0..levels, приходит из телеметрии. */
     @Volatile var level: Float = 0f
     @Volatile var levels: Int = 8
     /** 0..1 */
@@ -47,39 +48,85 @@ class VcoAudio {
     private var worker: Thread? = null
     @Volatile private var running = false
 
-    private val rate = 22050
     private val thresholdHz = 240f      // фон, слышен всегда
     private val topHz = 1150f           // сильная цель
-    private val glide = 0.12f           // 0..1, больше - резче
+
+    /*
+     * Скольжение частоты несимметричное, и это принципиально.
+     *
+     * Раньше было одно значение 0.12 на подъём и на спад. Подъём при этом
+     * размазывался почти на 200 мс — цель уже под катушкой, а тон только
+     * начинает ползти вверх. Ощущается это как «прибор опаздывает».
+     *
+     * Настоящий детектор звучит иначе: резкая атака и мягкий хвост. Поэтому
+     * вверх идём почти мгновенно, вниз — плавно.
+     */
+    private val attack = 0.55f          // TUNE: подъём тона, 1.0 = мгновенно
+    private val release = 0.10f         // TUNE: спад тона
+
+    /*
+     * Задержка звука на Android — это прежде всего размер буфера AudioTrack.
+     * Прошлая версия брала minBufferSize и удваивала его на нестандартной
+     * частоте 22050. Получалось около 150 мс уже записанного, но ещё не
+     * прозвучавшего сигнала, да ещё через программный передискретизатор.
+     *
+     * Берём НАТИВНУЮ частоту устройства и нативный размер пачки — только на
+     * них Android пускает дорожку по быстрому тракту. Плюс явный режим низкой
+     * задержки. Это самый крупный выигрыш во всей цепочке.
+     */
+    private fun nativeRate(): Int {
+        val am = ctx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return 48000
+        return am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48000
+    }
+
+    private fun nativeFrames(): Int {
+        val am = ctx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return 256
+        return am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 256
+    }
 
     private fun start() {
         if (running) return
         running = true
+
+        val rate = nativeRate()
+        val frames = nativeFrames().coerceIn(64, 1024)
         val minBuf = AudioTrack.getMinBufferSize(
             rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(2048)
+        ).coerceAtLeast(frames * 2)
 
-        track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setSampleRate(rate)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(minBuf * 2)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-            .also { it.play() }
+        // Две пачки — минимум, при котором звук не рвётся, и это уже единицы
+        // миллисекунд вместо сотни.
+        val bufBytes = maxOf(minBuf, frames * 2 * 2)
+
+        track = runCatching {
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(rate)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufBytes)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                }
+                .build()
+                .also { it.play() }
+        }.getOrNull()
+
+        if (track == null) { running = false; return }
 
         worker = Thread {
-            val buf = ShortArray(512)
+            val buf = ShortArray(frames)
             var phase = 0.0
             var freq = thresholdHz
             var amp = 0.10f
@@ -87,9 +134,11 @@ class VcoAudio {
                 val t = (level / levels.coerceAtLeast(1)).coerceIn(0f, 1f)
                 val wantFreq = thresholdHz + (topHz - thresholdHz) * t
                 val wantAmp = 0.10f + 0.90f * t          // фон тихий, цель громкая
+                val kF = if (wantFreq > freq) attack else release
+                val kA = if (wantAmp > amp) attack else release
                 for (i in buf.indices) {
-                    freq += (wantFreq - freq) * glide / buf.size
-                    amp += (wantAmp - amp) * glide / buf.size
+                    freq += (wantFreq - freq) * kF / buf.size
+                    amp += (wantAmp - amp) * kA / buf.size
                     phase += 2.0 * PI * freq / rate
                     if (phase > 2 * PI) phase -= 2 * PI
                     buf[i] = (sin(phase) * amp * volume * 26000).toInt().toShort()
@@ -99,7 +148,7 @@ class VcoAudio {
                 // приложение — оно ведь не на главном потоке.
                 try { track?.write(buf, 0, buf.size) } catch (_: Throwable) { break }
             }
-        }.also { it.isDaemon = true; it.start() }
+        }.also { it.isDaemon = true; it.priority = Thread.MAX_PRIORITY; it.start() }
     }
 
     private fun stop() {
@@ -119,6 +168,9 @@ class Haptics(ctx: Context) {
             (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
         else ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
 
+    /** Есть ли вообще мотор. Если нет — переключатель незачем показывать. */
+    val available: Boolean = vib?.hasVibrator() == true
+
     var enabled = false
     var triggerLevel = 5
 
@@ -130,17 +182,46 @@ class Haptics(ctx: Context) {
         wasAbove = above
     }
 
+    /** Короткий отклик при включении переключателя — сразу видно, что работает. */
+    fun test() = buzz(triggerLevel)
+
+    /*
+     * Почему здесь атрибуты, а не голый vibrate(effect).
+     *
+     * Устаревший vibrate(VibrationEffect) отправляет вибрацию с назначением
+     * USAGE_UNKNOWN. Начиная с Android 12 система такие вибрации глушит в
+     * массе ситуаций — беззвучный режим, «не беспокоить», выключенный отклик
+     * на касания, — и приложение при этом не получает никакой ошибки: метод
+     * отрабатывает, телефон молчит. Именно поэтому вибрация «не работала».
+     *
+     * Указываем назначение явно: на Android 13+ через VibrationAttributes,
+     * на 8..12 — через AudioAttributes с типом SONIFICATION. Тогда вибрация
+     * относится к полезному сигналу приложения и не подавляется.
+     */
     private fun buzz(level: Int) {
         val v = vib ?: return
+        if (!available) return
+
         // Значения зажимаем: createOneShot бросает исключение на нулевой
         // длительности и на амплитуде вне 1..255, а level приходит из эфира.
-        val ms = (25L + level.coerceAtLeast(0) * 6L).coerceIn(20L, 400L)
+        val safe = level.coerceIn(0, 32)
+        val ms = (60L + safe * 14L).coerceIn(40L, 400L)
+        val amp = (120 + safe * 16).coerceIn(1, 255)
+
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val amp = (80 + level * 20).coerceIn(1, 255)
-                v.vibrate(VibrationEffect.createOneShot(ms, amp))
-            } else {
-                @Suppress("DEPRECATION") v.vibrate(ms)
+            val effect = VibrationEffect.createOneShot(ms, amp)
+            when {
+                Build.VERSION.SDK_INT >= 33 ->
+                    v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+                else ->
+                    @Suppress("DEPRECATION")
+                    v.vibrate(
+                        effect,
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
             }
         }
     }

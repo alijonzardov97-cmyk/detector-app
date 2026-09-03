@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -72,7 +73,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ble = DetectorBle(this)
-        audio = VcoAudio()
+        audio = VcoAudio(this)
         haptics = Haptics(this)
         finds = FindLog(this)
         tracker = LocationTracker(this)
@@ -120,6 +121,23 @@ private fun App(
     val scope = rememberCoroutineScope()
 
     var screen by remember { mutableStateOf(Screen.DEVICES) }
+
+    /*
+     * Переключатели живут ЗДЕСЬ, а не внутри экрана прибора.
+     *
+     * Раньше они были remember-состоянием ConsoleScreen. Стоило уйти на карту,
+     * экран покидал композицию, remember забывался, и при возврате звук
+     * оказывался выключен — LaunchedEffect срабатывал с исходным false и гасил
+     * дорожку. Здесь состояние переживает любые переходы между экранами, а
+     * rememberSaveable — ещё и поворот экрана.
+     */
+    var sound by rememberSaveable { mutableStateOf(false) }
+    var buzz by rememberSaveable { mutableStateOf(true) }
+    var awake by rememberSaveable { mutableStateOf(true) }
+
+    LaunchedEffect(sound) { audio.enabled = sound }
+    LaunchedEffect(buzz) { haptics.enabled = buzz }
+    LaunchedEffect(awake) { onKeepAwake(awake) }
     var granted by remember { mutableStateOf(hasScanPermission(ctx)) }
 
     val link by ble.link.collectAsStateWithLifecycle()
@@ -170,9 +188,21 @@ private fun App(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted = hasScanPermission(ctx) }
 
+    /*
+     * Карта НЕ должна жить внутри прокручиваемой страницы.
+     *
+     * Так было раньше, и вот что получалось: MapView перехватывает
+     * вертикальные жесты, поэтому пальцем по карте страницу не пролистать, а
+     * кнопки под картой оказывались ниже края экрана — недоступны и не видны.
+     * На экране карты прокрутку выключаем, и карта занимает ровно остаток
+     * высоты между верхними и нижними кнопками.
+     */
+    val pageScroll = rememberScrollState()
+    val scrollable = screen != Screen.MAP
+
     Column(
-        Modifier.fillMaxSize().background(Ground)
-            .padding(horizontal = 14.dp).verticalScroll(rememberScrollState())
+        Modifier.fillMaxSize().background(Ground).padding(horizontal = 14.dp)
+            .then(if (scrollable) Modifier.verticalScroll(pageScroll) else Modifier)
     ) {
         TopBar(
             title = when (screen) {
@@ -199,8 +229,10 @@ private fun App(
             )
 
             Screen.CONSOLE -> ConsoleScreen(
-                model = model, tele = tele, history = history.value, audio = audio, haptics = haptics,
-                onKeepAwake = onKeepAwake,
+                model = model, tele = tele, history = history.value, haptics = haptics,
+                sound = sound, onSound = { sound = it },
+                buzz = buzz, onBuzz = { buzz = it },
+                awake = awake, onAwake = { awake = it },
                 onSetpoint = { key, v -> ble.send("$key$v") },
                 onMarkFind = { finds.add(tele.level, tracker.position.value?.latitude,
                                          tracker.position.value?.longitude) },
@@ -223,10 +255,11 @@ private fun App(
 
             Screen.MAP -> MapScreen(
                 log = finds, tracker = tracker,
+                modifier = Modifier.weight(1f),
                 onBack = { screen = Screen.FINDS },
             )
         }
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(if (scrollable) 28.dp else 10.dp))
     }
 }
 
@@ -338,20 +371,15 @@ private fun DevicesScreen(
 @Composable
 private fun ConsoleScreen(
     model: Model, tele: Telemetry, history: List<Int>,
-    audio: VcoAudio, haptics: Haptics,
-    onKeepAwake: (Boolean) -> Unit,
+    haptics: Haptics,
+    sound: Boolean, onSound: (Boolean) -> Unit,
+    buzz: Boolean, onBuzz: (Boolean) -> Unit,
+    awake: Boolean, onAwake: (Boolean) -> Unit,
     onSetpoint: (String, Int) -> Unit,
     onMarkFind: () -> Find,
     onFirmware: () -> Unit, onFinds: () -> Unit, onMap: () -> Unit, onBack: () -> Unit,
 ) {
-    var sound by remember { mutableStateOf(false) }
-    var buzz by remember { mutableStateOf(true) }
-    var awake by remember { mutableStateOf(true) }
     var lastFind by remember { mutableStateOf<Find?>(null) }
-
-    LaunchedEffect(sound) { audio.enabled = sound }
-    LaunchedEffect(buzz) { haptics.enabled = buzz }
-    LaunchedEffect(awake) { onKeepAwake(awake) }
 
     Section {
         Gauge(tele.level, model.levels, Modifier.fillMaxWidth().height(140.dp))
@@ -412,9 +440,14 @@ private fun ConsoleScreen(
     }
 
     Section {
-        Toggle("Звук в телефоне", sound) { sound = it }
-        Toggle("Вибрация на цель", buzz) { buzz = it }
-        Toggle("Не гасить экран", awake) { awake = it }
+        Toggle("Звук в телефоне", sound, onChange = onSound)
+        // Проверочный отклик при включении: сразу понятно, что мотор отвечает.
+        Toggle(
+            if (haptics.available) "Вибрация на цель" else "Вибрация (мотора нет)",
+            buzz && haptics.available,
+            enabled = haptics.available,
+        ) { on -> onBuzz(on); if (on) haptics.test() }
+        Toggle("Не гасить экран", awake, onChange = onAwake)
     }
 
     Spacer(Modifier.height(13.dp))
@@ -449,11 +482,19 @@ private fun Stat(label: String, value: String, sub: String, tint: Color, modifie
     }
 
 @Composable
-private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) =
+private fun Toggle(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) =
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Text(
+            label, color = if (enabled) Ink else InkFaint,
+            fontSize = 14.sp, modifier = Modifier.weight(1f)
+        )
         Switch(
-            checked = checked, onCheckedChange = onChange,
+            checked = checked, onCheckedChange = onChange, enabled = enabled,
             colors = SwitchDefaults.colors(checkedThumbColor = Brass, checkedTrackColor = Edge)
         )
     }
