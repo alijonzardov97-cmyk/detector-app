@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Фон адаптивной иконки. Тот же тёмный тон, что и у экрана прибора. -->
-    <color name="ic_launcher_background">#14161A</color>
-</resources>
