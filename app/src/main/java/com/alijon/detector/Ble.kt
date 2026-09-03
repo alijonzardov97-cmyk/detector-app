@@ -198,12 +198,25 @@ class DetectorBle(private val ctx: Context) {
 
     fun send(cmd: String) { writeRaw((cmd + "\n").toByteArray(Charsets.US_ASCII), true) }
 
-    /** Writes one chunk and waits for the controller to confirm it. */
+    /**
+     * Пишет один кусок и ждёт подтверждения контроллера.
+     *
+     * Прошлое ожидание, забытое по таймауту, обязательно снимаем: иначе
+     * запоздавший колбэк завершил бы уже СЛЕДУЮЩЕЕ ожидание, и передача
+     * рассыпалась бы дальше по цепочке.
+     */
     private suspend fun writeChunk(bytes: ByteArray): Boolean {
+        writeAck?.let { it.complete(false); writeAck = null }
+
         val ack = CompletableDeferred<Boolean>()
         writeAck = ack
         if (!writeRaw(bytes, true)) { writeAck = null; return false }
-        return withTimeoutOrNull(3000) { ack.await() } ?: false
+
+        // Приём куска на приборе может упереться в запись страницы флеша, а это
+        // десятки миллисекунд. Пять секунд — с большим запасом.
+        val ok = withTimeoutOrNull(5000) { ack.await() } ?: false
+        if (!ok) writeAck = null
+        return ok
     }
 
     private suspend fun awaitOta(timeoutMs: Long): String? {
@@ -227,11 +240,24 @@ class DetectorBle(private val ctx: Context) {
         val chunk = (mtu - 3).coerceIn(20, 512)
         var off = 0
         while (off < image.size) {
+            if (link.value != Link.READY) return "связь с прибором прервалась на $off байте"
+
             val end = minOf(off + chunk, image.size)
-            if (!writeChunk(image.copyOfRange(off, end))) return "передача оборвалась на ${off} байте"
+            val part = image.copyOfRange(off, end)
+
+            // Одиночный сбой куска — не повод бросать всю передачу: пробуем
+            // ещё дважды с короткой паузой. Прибор принимает по счётчику байт,
+            // так что повтор того же куска ему безразличен.
+            var sent = false
+            for (attempt in 1..3) {
+                if (writeChunk(part)) { sent = true; break }
+                delay(120L * attempt)
+            }
+            if (!sent) return "передача оборвалась на $off байте"
+
             off = end
             onProgress(off.toFloat() / image.size)
-            if (off % (chunk * 64) == 0) delay(1)   // let the stack breathe
+            if (off % (chunk * 32) == 0) delay(2)   // дать стеку выдохнуть
         }
 
         send("OTA!")
