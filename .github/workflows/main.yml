@@ -1,0 +1,42 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:      # кнопка "Run workflow" на вкладке Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3   # ставит SDK и принимает лицензии
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Собрать debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      # Имя файла с версией. Без этого все сборки называются app-debug.apk,
+      # в папке загрузок они сливаются в одну кучу, и на телефон легко
+      # поставить предыдущую, ничего не заметив.
+      - name: Переименовать APK по версии
+        id: rename
+        run: |
+          V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/debug/app-debug.apk "STT-Defense-$V.apk"
+          ls -l "STT-Defense-$V.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          # Номер прогона в имени — сразу видно, свежий ли архив скачан.
+          name: STT-Defense-${{ steps.rename.outputs.version }}-run${{ github.run_number }}
+          path: STT-Defense-*.apk
+          if-no-files-found: error
