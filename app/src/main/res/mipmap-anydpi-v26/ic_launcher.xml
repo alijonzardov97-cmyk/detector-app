@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Адаптивная иконка: фирменный знак STT на фоне из оригинального
+     изображения. Холст 108x108, видимая часть — центральные 72x72,
+     гарантированно видно только круг d=66. Знак вписан ровно в него.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- Для тем Material You берётся только прозрачность переднего слоя. -->
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
