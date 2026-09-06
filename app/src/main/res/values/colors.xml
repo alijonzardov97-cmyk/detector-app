@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!--
-         Фон иконки теперь не сплошной цвет, а картинка:
-         mipmap/ic_launcher_background. Файл оставлен для будущих цветов.
-    -->
-</resources>
