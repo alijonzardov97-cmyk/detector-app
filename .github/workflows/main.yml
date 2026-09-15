@@ -9,14 +9,25 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # ВЕРСИИ ДЕЙСТВИЙ ПРИХОДИТСЯ ПОДНИМАТЬ, И ВОТ ПОЧЕМУ.
+      #
+      # GitHub убрал со своих раннеров Node.js 20. Действия, написанные под
+      # него, теперь принудительно запускаются на Node.js 24, и часть из них
+      # этого не переживает. Именно так сломалась сборка: шаг
+      # android-actions/setup-android@v3 падал ещё до того, как дело доходило
+      # до исходников, а следующие шаги помечались как пропущенные — в логе
+      # это выглядело как «приложение не собирается», хотя код тут ни при чём.
+      #
+      # Все четыре действия подняты до версий, собранных под Node.js 24.
+      # Входные параметры у них те же, что и раньше.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3   # ставит SDK и принимает лицензии
+      - uses: android-actions/setup-android@v4   # ставит SDK и принимает лицензии
 
       # ВЕРСИЯ GRADLE ЗАФИКСИРОВАНА НАМЕРЕННО.
       #
@@ -25,7 +36,7 @@ jobs:
       # когда на раннере появился Gradle 9, сборка начала падать после того,
       # как все задачи уже выполнились, — и в логе оставалось только
       # «BUILD FAILED» с рассуждением о совместимости с Gradle 10.
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.9'
 
@@ -74,7 +85,9 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk "STT-Defense-$V.apk"
           ls -l "STT-Defense-$V.apk"
 
-      - uses: actions/upload-artifact@v4
+      # Тоже поднято: четвёртая версия собрана под Node.js 20 и попала бы под
+      # то же принудительное переселение на Node.js 24, что уронило сборку.
+      - uses: actions/upload-artifact@v7
         with:
           # Номер прогона в имени — сразу видно, свежий ли архив скачан.
           name: STT-Defense-${{ steps.rename.outputs.version }}-run${{ github.run_number }}
