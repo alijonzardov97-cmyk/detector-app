@@ -12,8 +12,8 @@ android {
         applicationId = "com.alijon.detector"
         minSdk = 26              // Android 8: BLE + фоновая работа без плясок
         targetSdk = 35
-        versionCode = 21
-        versionName = "2.8"
+        versionCode = 19
+        versionName = "2.6"
     }
 
     buildTypes {

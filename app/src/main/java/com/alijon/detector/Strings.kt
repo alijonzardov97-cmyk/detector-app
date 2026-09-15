@@ -446,59 +446,18 @@ object S {
         "比较器阶梯",
         "سلّم المقارنات",
     )
-    val recStart = S7(
-        "Записать проход",
-        "Record a pass",
-        "Zug aufzeichnen",
-        "Enregistrer un passage",
-        "Grabar una pasada",
-        "记录一次挥扫",
-        "تسجيل مسحة",
-    )
-    val recStop = S7("Стоп", "Stop", "Stopp", "Arrêter", "Parar", "停止", "إيقاف")
-    val recLines = S7(
-        "строк: %d", "lines: %d", "Zeilen: %d", "lignes : %d",
-        "líneas: %d", "行数：%d", "أسطر: %d",
-    )
-    val recSaved = S7(
-        "Записано: %s",
-        "Saved: %s",
-        "Gespeichert: %s",
-        "Enregistré : %s",
-        "Guardado: %s",
-        "已保存：%s",
-        "تم الحفظ: %s",
-    )
-    val recShare = S7(
-        "Отправить запись",
-        "Send the recording",
-        "Aufzeichnung senden",
-        "Envoyer l’enregistrement",
-        "Enviar la grabación",
-        "发送记录",
-        "إرسال التسجيل",
-    )
-    val recCaption = S7(
-        "Запись проводки, STT Defense",
-        "Sweep log, STT Defense",
-        "Zugaufzeichnung, STT Defense",
-        "Journal de balayage, STT Defense",
-        "Registro de barrido, STT Defense",
-        "挥扫记录，STT Defense",
-        "سجل المسح، STT Defense",
-    )
     val sweepSection = S7("Размах", "Sweep", "Schwung", "Balayage", "Barrido", "挥扫", "المسح")
     val sweepFast = S7("Быстро", "Fast", "Schnell", "Rapide", "Rápido", "快", "سريع")
     val sweepMid = S7("Средне", "Medium", "Mittel", "Moyen", "Medio", "中", "متوسط")
     val sweepSlow = S7("Медленно", "Slow", "Langsam", "Lent", "Lento", "慢", "بطيء")
     val sweepHint = S7(
-        "Сколько времени видно на поле целей и столько же участвует в подсчёте. Быстро — секунда, средне — полторы, медленно — две с половиной. Короткий размах не даёт засчитать обратный взмах над тем же предметом как вторую цель; длинный нужен при неспешной проводке, чтобы две разнесённые цели попали в одно окно.",
-        "How much time the target field shows — and the same span is what gets counted. Fast is one second, medium one and a half, slow two and a half. A short sweep stops the return swing over the same object from counting as a second target; a long one is for unhurried sweeping, so two well-spaced targets land in the same window.",
-        "So viel Zeit zeigt das Zielfeld, und genau diese Spanne wird gezählt. Schnell ist eine Sekunde, mittel anderthalb, langsam zweieinhalb. Ein kurzer Schwung verhindert, dass der Rückschwung über dasselbe Objekt als zweites Ziel zählt; ein langer ist für gemächliches Suchen, damit zwei weit auseinanderliegende Ziele in dasselbe Fenster fallen.",
-        "Durée visible sur le champ des cibles, et c’est la même durée qui est comptée. Rapide : une seconde, moyen : une seconde et demie, lent : deux et demie. Un balayage court empêche le retour au-dessus du même objet de compter comme une deuxième cible ; un long convient au balayage lent, pour que deux cibles espacées tiennent dans la même fenêtre.",
-        "Cuánto tiempo se ve en el campo de objetivos, y ese mismo tramo es el que se cuenta. Rápido: un segundo; medio: uno y medio; lento: dos y medio. Un barrido corto evita que la pasada de vuelta sobre el mismo objeto cuente como segundo objetivo; uno largo sirve para barrer despacio, para que dos objetivos separados entren en la misma ventana.",
-        "目标区显示多长时间，就按同样的时长计数。快为一秒，中为一秒半，慢为两秒半。短挥扫可避免回扫同一物体被算作第二个目标；长挥扫适合慢速搜索，让相距较远的两个目标落进同一窗口。",
-        "المدة الظاهرة في حقل الأهداف، وهي نفسها المدة التي تُحسب. سريع ثانية واحدة، متوسط ثانية ونصف، بطيء ثانيتان ونصف. المسح القصير يمنع احتساب حركة العودة فوق الجسم نفسه كهدف ثانٍ، والطويل مناسب للمسح المتأني كي يقع هدفان متباعدان في النافذة نفسها.",
+        "Сколько держится найденная цель, прежде чем счётчик её забудет, и сколько времени видно на поле. Быстро — секунда, средне — полторы, медленно — две с половиной. На сам поиск целей размах не влияет: вершина находится в момент, когда она случилась.",
+        "How long a found target is held before the counter forgets it, and how much time the field shows. Fast is one second, medium one and a half, slow two and a half. Sweep does not affect detection itself: a peak is found at the moment it happens.",
+        "Wie lange ein gefundenes Ziel gehalten wird, bevor der Zähler es vergisst, und wie viel Zeit das Feld zeigt. Schnell eine Sekunde, mittel anderthalb, langsam zweieinhalb. Auf die Erkennung selbst wirkt der Schwung nicht: ein Gipfel wird in dem Moment gefunden, in dem er entsteht.",
+        "Durée pendant laquelle une cible trouvée est retenue avant que le compteur ne l’oublie, et durée visible sur le champ. Rapide : une seconde, moyen : une et demie, lent : deux et demie. Le balayage n’influe pas sur la détection elle-même : un pic est trouvé au moment où il se produit.",
+        "Cuánto se retiene un objetivo encontrado antes de que el contador lo olvide, y cuánto tiempo se ve en el campo. Rápido: un segundo; medio: uno y medio; lento: dos y medio. El barrido no afecta a la detección en sí: un pico se encuentra en el momento en que ocurre.",
+        "找到的目标保留多久后计数器将其忘记，以及目标区显示多长时间。快为一秒，中为一秒半，慢为两秒半。挥扫设置不影响检测本身：峰值在发生的那一刻就被找到。",
+        "مدة الاحتفاظ بالهدف بعد العثور عليه قبل أن ينساه العدّاد، والمدة الظاهرة في الحقل. سريع ثانية، متوسط ثانية ونصف، بطيء ثانيتان ونصف. لا يؤثر المسح على الكشف نفسه: تُلتقط القمة لحظة حدوثها.",
     )
     val sepSection = S7(
         "Разделение целей",

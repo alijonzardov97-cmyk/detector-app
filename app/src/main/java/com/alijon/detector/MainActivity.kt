@@ -72,7 +72,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var gps: GpsGate
     private lateinit var bright: BrightnessControl
     private lateinit var sweep: SweepBuffer
-    private lateinit var rec: SweepRecorder
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,9 +87,9 @@ class MainActivity : ComponentActivity() {
         gps = GpsGate(tracker)
         bright = BrightnessControl(this)
         sweep = SweepBuffer()
-        rec = SweepRecorder(this)
         sweep.dip = prefs.sepDip
-        sweep.windowMs = SweepBuffer.windowFor(prefs.sweepSpeed)
+        sweep.viewMs = SweepBuffer.viewFor(prefs.sweepSpeed)
+        sweep.holdMs = SweepBuffer.holdFor(prefs.sweepSpeed)
 
         // Порог «найден металл» один на всё: флажок, GPS и подсветка ступени.
         flagger.threshold = prefs.flagLevel - 1
@@ -121,12 +120,6 @@ class MainActivity : ComponentActivity() {
          */
         ble.onSample = { lv, deviceMs -> sweep.add(lv, deviceMs) }
 
-        /*
-         * Запись прохода берёт строку до разбора — ей нужно то, что реально
-         * пришло из эфира, а не то, что приложение сумело из этого понять.
-         */
-        ble.onRawLine = { line -> rec.feed(line) }
-
         setContent {
             /*
              * Светлая тема требует своей цветовой схемы, иначе Material рисует
@@ -151,7 +144,7 @@ class MainActivity : ComponentActivity() {
                 App(
                     ble = ble, audio = audio, haptics = haptics, finds = finds,
                     tracker = tracker, flagger = flagger, look = look, lang = lang,
-                    prefs = prefs, gps = gps, bright = bright, sweep = sweep, rec = rec,
+                    prefs = prefs, gps = gps, bright = bright, sweep = sweep,
                     onBrightness = { v -> setWindowBrightness(v) },
                     onBackground = { on ->
                         if (on) DetectorService.start(this) else DetectorService.stop(this)
@@ -220,7 +213,6 @@ private fun App(
     gps: GpsGate,
     bright: BrightnessControl,
     sweep: SweepBuffer,
-    rec: SweepRecorder,
     onBrightness: (Float) -> Unit,
     onBackground: (Boolean) -> Unit,
     onKeepAwake: (Boolean) -> Unit,
@@ -297,7 +289,10 @@ private fun App(
      * между отсчётами.
      */
     LaunchedEffect(prefs.sepDip) { sweep.dip = prefs.sepDip }
-    LaunchedEffect(prefs.sweepSpeed) { sweep.windowMs = SweepBuffer.windowFor(prefs.sweepSpeed) }
+    LaunchedEffect(prefs.sweepSpeed) {
+        sweep.viewMs = SweepBuffer.viewFor(prefs.sweepSpeed)
+        sweep.holdMs = SweepBuffer.holdFor(prefs.sweepSpeed)
+    }
     LaunchedEffect(link) { if (link != Link.READY) sweep.clear() }
 
     /*
@@ -380,17 +375,6 @@ private fun App(
             Screen.CONSOLE -> ConsoleScreen(
                 model = model, tele = tele, sweep = sweep, haptics = haptics,
                 dots = prefs.plotDots, onDots = { prefs.plotDots = it },
-                rec = rec,
-                onRecord = {
-                    if (rec.active) rec.stop()
-                    else rec.start(
-                        model = ident?.model ?: model.id,
-                        fw = ident?.fw ?: "-",
-                        serial = ident?.serial ?: "-",
-                        dip = prefs.sepDip,
-                        sweepSpeed = prefs.sweepSpeed,
-                    )
-                },
                 onBlank = { blanked = true },
                 sound = sound, onSound = { sound = it },
                 buzz = buzz, onBuzz = { buzz = it },
@@ -571,7 +555,6 @@ private fun DevicesScreen(
 private fun ConsoleScreen(
     model: Model, tele: Telemetry, sweep: SweepBuffer,
     dots: Boolean, onDots: (Boolean) -> Unit,
-    rec: SweepRecorder, onRecord: () -> Unit,
     haptics: Haptics,
     sound: Boolean, onSound: (Boolean) -> Unit,
     buzz: Boolean, onBuzz: (Boolean) -> Unit,
@@ -690,47 +673,6 @@ private fun ConsoleScreen(
             enabled = haptics.available,
         ) { on -> onBuzz(on); if (on) haptics.test() }
         Toggle(S.keepAwake.t, awake, onChange = onAwake)
-    }
-
-    /* ------------------------------------------------- запись прохода ----- */
-    /*
-     * Кнопка живёт на экране прибора, а не в настройках, нарочно: её жмут
-     * в поле, за секунду до проводки и сразу после неё.
-     *
-     * Запись идёт в память и ложится на диск одним куском при остановке, иначе
-     * дисковый ввод-вывод вклинивался бы в приём строк.
-     */
-    Section {
-        val ctx = LocalContext.current
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                onClick = onRecord,
-                modifier = Modifier.weight(1f).height(48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (rec.active) Crit else Panel,
-                    contentColor = if (rec.active) Ground else Brass,
-                ),
-            ) { Text(if (rec.active) S.recStop.t else S.recStart.t, fontSize = 13.sp) }
-
-            if (rec.active) {
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    S.recLines.t(rec.lines), color = InkDim, fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
-        }
-
-        rec.saved?.let { f ->
-            Spacer(Modifier.height(8.dp))
-            Text(S.recSaved.t(f.name), color = InkFaint, fontSize = 11.sp,
-                 fontFamily = FontFamily.Monospace)
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = { Share.file(ctx, f, S.recCaption.t) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(S.recShare.t, color = Brass, fontSize = 13.sp) }
-        }
     }
 
     Spacer(Modifier.height(13.dp))
@@ -968,7 +910,7 @@ private fun Trace(sweep: SweepBuffer, levels: Int, modifier: Modifier) = Canvas(
     if (sweep.tick < 0) return@Canvas
     val pts = sweep.samples
     if (pts.size < 2) return@Canvas
-    val g = PlotGrid(size.width, size.height, levels, pts.last().t, sweep.windowMs)
+    val g = PlotGrid(size.width, size.height, levels, pts.last().t, sweep.viewMs)
 
     listOf(2, 4, 6).forEach {
         drawLine(EdgeSoft, Offset(0f, g.y(it.toFloat())), Offset(size.width, g.y(it.toFloat())), 1f)
@@ -1038,7 +980,7 @@ private fun DotField(sweep: SweepBuffer, levels: Int, modifier: Modifier) {
         if (sweep.tick < 0) return@Canvas
         val pts = sweep.samples
         val peaks = sweep.peaks
-        val window = sweep.windowMs
+        val window = sweep.viewMs
         val gutter = 20.dp.toPx()                 // колонка номеров делений
         val g = PlotGrid(size.width, size.height, levels,
                          pts.lastOrNull()?.t ?: 0L, window,

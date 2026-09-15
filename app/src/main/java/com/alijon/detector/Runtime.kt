@@ -145,34 +145,6 @@ object Share {
         send(ctx, "$caption\n$body")
     }
 
-    /**
-     * Отдать файл записи любому мессенджеру или почте.
-     *
-     * Через FileProvider, а не прямым путём: начиная с Android 7 передавать
-     * file:// в чужое приложение запрещено, система бросает FileUriExposedException.
-     * Провайдер объявлен в манифесте и отдаёт наружу только папку records.
-     */
-    fun file(ctx: Context, f: java.io.File, caption: String) {
-        val uri = runCatching {
-            androidx.core.content.FileProvider.getUriForFile(
-                ctx, ctx.packageName + ".files", f
-            )
-        }.getOrNull() ?: return
-
-        val i = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, f.name)
-            putExtra(Intent.EXTRA_TEXT, caption)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val chooser = Intent.createChooser(i, null).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        runCatching { ctx.startActivity(chooser) }
-    }
-
     private fun send(ctx: Context, text: String) {
         val i = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

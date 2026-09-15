@@ -68,16 +68,6 @@ class DetectorBle(private val ctx: Context) {
      */
     var onSample: ((Int, Long?) -> Unit)? = null
 
-    /*
-     * Сырая строка, как пришла из эфира, до всякого разбора.
-     *
-     * Нужна записи прохода: она должна давать возможность повторить ровно то,
-     * что видело приложение, включая его собственные ошибки разбора. Поэтому
-     * зовётся раньше всех остальных отводов и на КАЖДУЮ строку — паспорт и
-     * настройки прибора тоже попадают в файл, как контекст.
-     */
-    var onRawLine: ((String) -> Unit)? = null
-
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
     private var textBuf = StringBuilder()
@@ -306,7 +296,6 @@ class DetectorBle(private val ctx: Context) {
     }
 
     private fun handleLine(line: String) {
-        onRawLine?.invoke(line)
         Parser.identity(line)?.let { identity.value = it; return }
         Parser.config(line)?.let { config.value = it; return }
         val keys = Models.of(identity.value?.model).controls.map { it.key }

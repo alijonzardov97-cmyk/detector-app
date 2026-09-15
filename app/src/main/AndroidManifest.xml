@@ -64,22 +64,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-            Файлы записи отдаются наружу только через провайдера: начиная с
-            Android 7 передавать file:// в чужое приложение запрещено, система
-            бросает FileUriExposedException. Права даются на одну ссылку и на
-            время показа списка приложений, exported=false.
-        -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.files"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
-
         <service
             android:name=".DetectorService"
             android:exported="false"
