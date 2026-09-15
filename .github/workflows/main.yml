@@ -27,7 +27,49 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v4   # ставит SDK и принимает лицензии
+      # ANDROID SDK БЕРЁМ ИЗ ОБРАЗА МАШИНЫ, А НЕ ЧУЖИМ ДЕЙСТВИЕМ.
+      #
+      # Здесь стояло android-actions/setup-android, и именно оно роняло сборку
+      # два прогона подряд — сначала третья версия, потом четвёртая. Что у него
+      # внутри не сложилось, из доступного лога не видно, и выяснять это нет
+      # смысла: действие тут попросту не нужно. В образах Ubuntu, на которых
+      # GitHub гоняет сборки, Android SDK уже стоит — и командные средства, и
+      # build-tools, и платформы; я проверил описания обоих образов.
+      #
+      # Поэтому делаем то же самое сами и вслух. Каждый шаг виден в логе, и если
+      # чего-то не хватит, будет написано чего именно, а не «шаг не удался».
+      - name: Подготовить Android SDK
+        run: |
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            echo "::error::Android SDK не найден в образе: ANDROID_SDK_ROOT и ANDROID_HOME пусты"
+            exit 1
+          fi
+          echo "Каталог SDK: $SDK"
+
+          SDKMANAGER="$(command -v sdkmanager || echo "$SDK/cmdline-tools/latest/bin/sdkmanager")"
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager не найден: $SDKMANAGER"
+            exit 1
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+
+          # Лицензии. Отказ здесь не смертелен: в образе они обычно уже приняты,
+          # а «yes |» роняет sdkmanager по SIGPIPE, что к делу отношения не имеет.
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+
+          # Ставим ровно то, что нужно этой сборке. Если чего-то в образе нет,
+          # оно докачается, а имя недостающего пакета будет видно в логе.
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          # Явно указываем Gradle, где SDK. Обычно хватает переменной окружения,
+          # но local.properties надёжнее и ничего не ломает.
+          echo "sdk.dir=$SDK" > local.properties
+
+          echo "--- что установлено ---"
+          ls "$SDK/platforms" || true
+          ls "$SDK/build-tools" || true
 
       # ВЕРСИЯ GRADLE ЗАФИКСИРОВАНА НАМЕРЕННО.
       #
